@@ -1,4 +1,6 @@
 const { Usuario } = require('../../database/models');
+const tokens = require('../../middlewares/autentication/util');
+const hashUser = require('../../middlewares/hash/hashUser');
 
 class UsuarioController {
     async index(req, res) {
@@ -23,21 +25,80 @@ class UsuarioController {
             return res.status(500).json({ error: "Erro interno do servidor" });
         }
     }
-    async create(req, res) {
+    async cadastro(req, res) {
+        console.log('Chegou no endpoint /cadastro');
+        console.log('Body recebido:', req.body);
         try {
-            //console.log('Body recebido:', req.body);
             const { nome, email, senha, cpf, telefone } = req.body;
-            const newUsuario = await Usuario.create({ nome, email, senha, cpf, telefone });
+            if (!nome || !email || !senha || !cpf || !telefone) {
+                return res.status(400).json({ error: 'Campos obrigatórios faltando' });
+            }
+            const hash_senha = await hashUser.encripitar(senha);
+            console.log("Senha hasheada:", hash_senha);
+            const newUsuario = await Usuario.create({
+                nome: nome,
+                email: email,
+                senha: hash_senha,
+                cpf: cpf,
+                telefone: telefone
+            });
+
+            console.log("Usuario criado:", newUsuario.toJSON());
+
             return res.status(201).json({
                 "message": "Usuário criado",
-                "Usuario": newUsuario
+                "Usuario": newUsuario.toJSON()
             });
         }
         catch (error) {
-            console.error(error);
+            console.error("Erro no cadastro:", error);
+            if (error.name === 'SequelizeUniqueConstraintError') {
+                return res.status(400).json({ error: "CPF, email ou telefone já cadastrado" });
+            }
             return res.status(500).json({ error: "Erro interno do servidor" });
         }
     }
+
+    async login(req, res) {
+        try {
+            const { email, senha } = req.body;
+            if (!email || !senha) {
+                return res.status(400).json({ error: 'Os campos são requeridos' });
+            }
+
+            const usuario = await Usuario.findOne({ where: { email } });
+            if (!usuario) {
+                return res.status(400).json({ error: 'Usuário não encontrado' });
+            }
+
+            // Aqui você deveria verificar a senha
+            const senhaValida = await tokens.descripitar(senha, usuario.senha);
+            if (!senhaValida) {
+                return res.status(401).json({ error: 'Senha incorreta' });
+            }
+
+            // Gerar access token
+            const access_token = await tokens.gerar_access({ id: usuario.id, email: usuario.email });
+            const refresh_token = await tokens.gerar_refresh_token();
+
+            const hash_token = hashUser.encripitar(refresh_token);
+
+            usuario.refresh_token = hash_token;
+            await usuario.save();
+
+            // Retornar token para o frontend
+            return res.status(201).json({
+                message: 'Login realizado com sucesso',
+                access_token,
+                refresh_token: refresh_token
+            });
+
+        } catch (error) {
+            console.error(error);
+            return res.status(500).json({ error: 'Erro no servidor' });
+        }
+    }
+
     async update(req, res) {
         //console.log('Body recebido:', req.body);
         try {
@@ -47,7 +108,6 @@ class UsuarioController {
                 return res.status(404).json({ error: 'Usuário não encontrado' });
             }
 
-            // Atualiza apenas os campos enviados no body
             Object.assign(usuario, req.body);
 
             await usuario.save();
@@ -57,18 +117,18 @@ class UsuarioController {
             res.status(500).json({ error: 'Erro ao atualizar usuário' });
         }
     }
-    async destroy(req, res){
-        try{
+    async destroy(req, res) {
+        try {
             const id = req.body.id;
             const usuario = await Usuario.findByPk(id);
-            if(!usuario){
+            if (!usuario) {
                 console.log('Usuário não encontrado');
-                return res.json({'message': 'Usuário não encontrado'})
+                return res.json({ 'message': 'Usuário não encontrado' })
             }
             await usuario.destroy();
 
             return res.json('Usuário apagado');
-        }catch(error){
+        } catch (error) {
             console.error(error);
             return res.status(500).json({ error: "Erro interno do servidor" });
         }
